@@ -1,4 +1,4 @@
-workspace = {}
+workspace = { members = ["crates/wry-unity"] }
 
 [package]
 name = "wry"
@@ -6,7 +6,7 @@ version = "0.56.1"
 authors = ["Tauri Programme within The Commons Conservancy"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
-description = "Cross-platform WebView rendering library"
+description = "Cross-platform WebView rendering library (Unity-embeddable fork)"
 readme = "README.md"
 repository = "https://github.com/tauri-apps/wry"
 documentation = "https://docs.rs/wry"
@@ -38,6 +38,8 @@ os-webview = [
 ]
 x11 = ["x11-dl", "gdkx11", "tao/x11"]
 tracing = ["dep:tracing"]
+# WRY-UNITY: enables the `wry::unity` embedding glue used by the wry-unity C ABI crate.
+unity = []
 
 [dependencies]
 tracing = { version = "0.1", optional = true }

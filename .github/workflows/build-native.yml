@@ -1,0 +1,221 @@
+name: Build native Unity libraries
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - dev
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: native-windows
+
+      - name: Build native library
+        run: cargo build -p wry-unity --release --target x86_64-pc-windows-msvc
+
+      - name: Stage Unity plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Plugins/Windows/x86_64 | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/wry_unity.dll dist/Plugins/Windows/x86_64/
+
+      - name: Upload Windows library
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-x64
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WebKitGTK development files
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: native-linux
+
+      - name: Build native library
+        run: cargo build -p wry-unity --release --target x86_64-unknown-linux-gnu
+
+      - name: Stage Unity plugin
+        run: |
+          mkdir -p dist/Plugins/Linux/x86_64
+          cp target/x86_64-unknown-linux-gnu/release/libwry_unity.so dist/Plugins/Linux/x86_64/
+
+      - name: Upload Linux library
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-x64
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android ARM and x86 ABIs
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Android SDK and NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform tools
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: native-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Android native libraries
+        run: |
+          cargo ndk \
+            -t arm64-v8a \
+            -t armeabi-v7a \
+            -t x86_64 \
+            -t x86 \
+            -o android/wry-unity/src/main/jniLibs \
+            build -p wry-unity --release
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Android AAR
+        working-directory: android
+        run: gradle --no-daemon :wry-unity:assembleRelease
+
+      - name: Stage Unity plugin
+        run: |
+          mkdir -p dist/Plugins/Android
+          cp android/wry-unity/build/outputs/aar/wry-unity-release.aar dist/Plugins/Android/
+
+      - name: Upload Android library
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-android
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS device and simulator
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: native-ios
+
+      - name: Build iOS device library
+        run: cargo build -p wry-unity --release --target aarch64-apple-ios
+
+      - name: Build iOS simulator libraries
+        run: |
+          cargo build -p wry-unity --release --target aarch64-apple-ios-sim
+          cargo build -p wry-unity --release --target x86_64-apple-ios
+
+      - name: Create universal simulator library
+        run: |
+          mkdir -p dist/Plugins/iOS/device dist/Plugins/iOS/simulator
+          cp target/aarch64-apple-ios/release/libwry_unity.a dist/Plugins/iOS/device/
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libwry_unity.a \
+            target/x86_64-apple-ios/release/libwry_unity.a \
+            -output dist/Plugins/iOS/simulator/libwry_unity.a
+
+      - name: Upload iOS libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ios
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    name: Assemble Unity native bundle
+    runs-on: ubuntu-24.04
+    needs: [windows, linux, android, ios]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download platform libraries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add C header
+        run: |
+          mkdir -p dist/include
+          cp crates/wry-unity/include/wry_unity.h dist/include/
+
+      - name: Upload combined bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-unity-bundle
+          path: dist
+          if-no-files-found: error
+          retention-days: 30

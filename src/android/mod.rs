@@ -21,7 +21,11 @@ use raw_window_handle::HasWindowHandle;
 use std::{
   borrow::Cow,
   collections::HashMap,
-  sync::{mpsc::channel, Arc, Mutex},
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::channel,
+    Arc, Mutex,
+  },
   time::Duration,
 };
 
@@ -82,6 +86,7 @@ define_static_handlers! {
 }
 
 static PACKAGE: OnceCell<String> = OnceCell::new();
+pub(crate) static UNITY_MODE: AtomicBool = AtomicBool::new(false);
 
 type EvalCallback = Box<dyn Fn(String) + Send + 'static>;
 
@@ -119,6 +124,10 @@ pub unsafe fn android_setup(
 
   let activity_id = env
     .call_method(activity.as_obj(), "getId", "()I", &[])
+    .or_else(|_| {
+      let _ = env.exception_clear();
+      env.call_method(activity.as_obj(), "hashCode", "()I", &[])
+    })
     .unwrap()
     .i()
     .unwrap();
@@ -148,9 +157,47 @@ pub unsafe fn android_setup(
   }
 }
 
+/// Sets up WRY for a Unity `Activity`, which does not inherit WryActivity.
+pub unsafe fn android_setup_unity(
+  package: &str,
+  mut env: JNIEnv,
+  activity: GlobalRef,
+) -> ActivityId {
+  UNITY_MODE.store(true, Ordering::Release);
+  PACKAGE.get_or_init(|| package.to_string());
+  let vm = env
+    .get_java_vm()
+    .expect("Unity JNI environment has no JavaVM");
+  let activity_id = env
+    .call_method(activity.as_obj(), "hashCode", "()I", &[])
+    .unwrap()
+    .i()
+    .unwrap();
+  let window_manager = env
+    .call_method(
+      &activity,
+      "getWindowManager",
+      "()Landroid/view/WindowManager;",
+      &[],
+    )
+    .unwrap()
+    .l()
+    .unwrap();
+  let window_manager = env.new_global_ref(window_manager).unwrap();
+  register_activity_proxy(vm, activity_id, activity, window_manager);
+  binding::onFirstActivityCreateWry(env, JClass::from(JObject::null()));
+  activity_id
+}
+
 pub(crate) struct InnerWebView {
   id: String,
   pub activity_id: ActivityId,
+}
+
+impl Drop for InnerWebView {
+  fn drop(&mut self) {
+    MainPipe::send(self.activity_id, WebViewMessage::Destroy(self.id.clone()));
+  }
 }
 
 impl InnerWebView {
@@ -190,6 +237,8 @@ impl InnerWebView {
       autoplay,
       user_agent,
       javascript_disabled,
+      bounds,
+      visible,
       ..
     } = attributes;
 
@@ -323,6 +372,8 @@ impl InnerWebView {
       user_agent,
       initialization_scripts,
       javascript_disabled,
+      bounds,
+      visible,
     };
 
     WEBVIEW_ATTRIBUTES
@@ -463,13 +514,13 @@ impl InnerWebView {
     Ok(crate::Rect::default())
   }
 
-  pub fn set_bounds(&self, _bounds: crate::Rect) -> Result<()> {
-    // Unsupported
+  pub fn set_bounds(&self, bounds: crate::Rect) -> Result<()> {
+    MainPipe::send(self.activity_id, WebViewMessage::SetBounds(bounds));
     Ok(())
   }
 
-  pub fn set_visible(&self, _visible: bool) -> Result<()> {
-    // Unsupported
+  pub fn set_visible(&self, visible: bool) -> Result<()> {
+    MainPipe::send(self.activity_id, WebViewMessage::SetVisible(visible));
     Ok(())
   }
 
@@ -521,15 +572,30 @@ pub fn find_class<'a>(
   name: String,
 ) -> JniResult<JClass<'a>> {
   let class_name = env.new_string(name.replace('/', "."))?;
-  let my_class = env
-    .call_method(
-      activity,
-      "getAppClass",
-      "(Ljava/lang/String;)Ljava/lang/Class;",
-      &[(&class_name).into()],
-    )?
+  let result = env.call_method(
+    activity,
+    "getAppClass",
+    "(Ljava/lang/String;)Ljava/lang/Class;",
+    &[(&class_name).into()],
+  );
+  if let Ok(result) = result {
+    return Ok(result.l()?.into());
+  }
+  let _ = env.exception_clear();
+  let loader = env
+    .call_method(activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
     .l()?;
-  Ok(my_class.into())
+  Ok(
+    env
+      .call_method(
+        &loader,
+        "loadClass",
+        "(Ljava/lang/String;)Ljava/lang/Class;",
+        &[(&class_name).into()],
+      )?
+      .l()?
+      .into(),
+  )
 }
 
 /// Dispatch a closure to run on the Android context.

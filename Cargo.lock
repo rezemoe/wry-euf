@@ -4108,6 +4108,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wry-unity"
+version = "0.1.0"
+dependencies = [
+ "gtk",
+ "http",
+ "jni",
+ "raw-window-handle",
+ "windows 0.62.2",
+ "wry",
+ "x11-dl",
+]
+
+[[package]]
 name = "x11"
 version = "2.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,10 @@
+{
+  "name": "com.wry.unity",
+  "displayName": "WRY Unity WebView",
+  "version": "0.1.0",
+  "unity": "2021.3",
+  "description": "Embeddable WRY WebView overlay for Unity desktop and mobile players.",
+  "keywords": ["webview", "wry", "unity", "ipc"],
+  "license": "MIT OR Apache-2.0",
+  "author": { "name": "WRY Unity contributors" }
+}

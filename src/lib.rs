@@ -358,6 +358,8 @@ pub(crate) mod android;
 #[cfg(target_os = "android")]
 pub use crate::android::android_setup;
 #[cfg(target_os = "android")]
+pub use crate::android::android_setup_unity;
+#[cfg(target_os = "android")]
 pub mod prelude {
   pub use crate::android::{binding::*, dispatch, find_class, Context};
   pub use tao_macros::{android_fn, generate_package_name};

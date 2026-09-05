@@ -446,7 +446,20 @@ impl InnerWebView {
       };
       #[cfg(target_os = "ios")]
       let webview = {
-        let frame = ns_view.frame();
+        let frame = if is_child {
+          if let Some(bounds) = attributes.bounds {
+            let (x, y) = bounds.position.to_logical::<f64>(1.0).into();
+            let (width, height) = bounds.size.to_logical::<f64>(1.0).into();
+            CGRect {
+              origin: CGPoint::new(x, y),
+              size: CGSize::new(width, height),
+            }
+          } else {
+            ns_view.frame()
+          }
+        } else {
+          ns_view.frame()
+        };
         let webview: Retained<WryWebView> =
           objc2::msg_send![super(webview), initWithFrame: frame, configuration: &**config];
         // Without a background color the webview stays opaque and white, flashing before the
@@ -518,9 +531,11 @@ impl InnerWebView {
       }
       #[cfg(target_os = "ios")]
       {
-        webview.setAutoresizingMask(
-          UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight,
-        );
+        if !is_child || attributes.bounds.is_none() {
+          webview.setAutoresizingMask(
+            UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight,
+          );
+        }
 
         // disable scroll bounce by default
         // https://developer.apple.com/documentation/webkit/wkwebview/1614784-scrollview?language=objc
@@ -1044,6 +1059,16 @@ impl InnerWebView {
         };
         self.webview.setFrame(frame);
       }
+    }
+
+    #[cfg(target_os = "ios")]
+    if self.is_child {
+      let (x, y) = bounds.position.to_logical::<f64>(1.0).into();
+      let (width, height) = bounds.size.to_logical::<f64>(1.0).into();
+      self.webview.setFrame(CGRect {
+        origin: CGPoint::new(x, y),
+        size: CGSize::new(width, height),
+      });
     }
 
     Ok(())

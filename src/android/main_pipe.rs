@@ -168,6 +168,8 @@ impl<'a> MainPipe<'a> {
           initialization_scripts,
           id,
           javascript_disabled,
+          bounds,
+          visible,
           ..
         } = attrs;
 
@@ -236,12 +238,14 @@ impl<'a> MainPipe<'a> {
         }
 
         let webview_class_name = format!("{package}/RustWebView");
-        self.env.call_method(
-          &activity,
-          "setWebView",
-          format!("(L{webview_class_name};)V"),
-          &[(&webview).into()],
-        )?;
+        if !super::UNITY_MODE.load(std::sync::atomic::Ordering::Acquire) {
+          self.env.call_method(
+            &activity,
+            "setWebView",
+            format!("(L{webview_class_name};)V"),
+            &[(&webview).into()],
+          )?;
+        }
         // Navigation
         if let Some(u) = url {
           if let Ok(url) = self.env.new_string(u) {
@@ -286,9 +290,14 @@ impl<'a> MainPipe<'a> {
           &activity,
           format!("{package}/RustWebChromeClient"),
         )?;
+        let chrome_constructor = if super::UNITY_MODE.load(std::sync::atomic::Ordering::Acquire) {
+          "(Landroid/app/Activity;Ljava/lang/String;)V".to_string()
+        } else {
+          format!("(L{package}/WryActivity;Ljava/lang/String;)V")
+        };
         let web_chrome_client = self.env.new_object(
           &rust_webchrome_client_class,
-          format!("(L{package}/WryActivity;Ljava/lang/String;)V"),
+          chrome_constructor,
           &[(&activity).into(), (&id).into()],
         )?;
         self.env.call_method(
@@ -313,13 +322,60 @@ impl<'a> MainPipe<'a> {
           &[(&ipc).into(), (&ipc_str).into()],
         )?;
 
-        // Set content view
-        self.env.call_method(
-          &activity,
-          "setContentView",
-          "(Landroid/view/View;)V",
-          &[(&webview).into()],
-        )?;
+        if super::UNITY_MODE.load(std::sync::atomic::Ordering::Acquire) {
+          const CONTENT_ID: i32 = 0x0102_0002;
+          let content = self
+            .env
+            .call_method(
+              &activity,
+              "findViewById",
+              "(I)Landroid/view/View;",
+              &[CONTENT_ID.into()],
+            )?
+            .l()?;
+          let (width, height, x, y) = bounds
+            .map(|bounds| {
+              let position = bounds.position.to_physical::<i32>(1.0);
+              let size = bounds.size.to_physical::<i32>(1.0);
+              (
+                size.width.max(1),
+                size.height.max(1),
+                position.x,
+                position.y,
+              )
+            })
+            .unwrap_or((-1, -1, 0, 0));
+          let gravity = 0x30_i32 | 0x0080_0003_i32;
+          let params = self.env.new_object(
+            "android/widget/FrameLayout$LayoutParams",
+            "(III)V",
+            &[width.into(), height.into(), gravity.into()],
+          )?;
+          self.env.call_method(
+            &params,
+            "setMargins",
+            "(IIII)V",
+            &[x.into(), y.into(), 0.into(), 0.into()],
+          )?;
+          self.env.call_method(
+            &content,
+            "addView",
+            "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V",
+            &[(&webview).into(), (&params).into()],
+          )?;
+          if !visible {
+            self
+              .env
+              .call_method(&webview, "setVisibility", "(I)V", &[4_i32.into()])?;
+          }
+        } else {
+          self.env.call_method(
+            &activity,
+            "setContentView",
+            "(Landroid/view/View;)V",
+            &[(&webview).into()],
+          )?;
+        }
 
         if let Some(on_webview_created) = on_webview_created {
           if let Err(_e) = on_webview_created(super::Context {
@@ -380,6 +436,74 @@ impl<'a> MainPipe<'a> {
         if let Some(webview) = get_webview(activity_id) {
           set_background_color(&mut self.env, webview.as_obj(), background_color)?;
         }
+      }
+      WebViewMessage::SetBounds(bounds) => {
+        if let Some(webview) = get_webview(activity_id) {
+          let params = self
+            .env
+            .call_method(
+              webview.as_obj(),
+              "getLayoutParams",
+              "()Landroid/view/ViewGroup$LayoutParams;",
+              &[],
+            )?
+            .l()?;
+          let position = bounds.position.to_physical::<i32>(1.0);
+          let size = bounds.size.to_physical::<i32>(1.0);
+          self
+            .env
+            .set_field(&params, "width", "I", size.width.max(1))?;
+          self
+            .env
+            .set_field(&params, "height", "I", size.height.max(1))?;
+          self.env.call_method(
+            &params,
+            "setMargins",
+            "(IIII)V",
+            &[position.x.into(), position.y.into(), 0.into(), 0.into()],
+          )?;
+          self.env.call_method(
+            webview.as_obj(),
+            "setLayoutParams",
+            "(Landroid/view/ViewGroup$LayoutParams;)V",
+            &[(&params).into()],
+          )?;
+        }
+      }
+      WebViewMessage::SetVisible(visible) => {
+        if let Some(webview) = get_webview(activity_id) {
+          self.env.call_method(
+            webview.as_obj(),
+            "setVisibility",
+            "(I)V",
+            &[if visible { 0_i32 } else { 4_i32 }.into()],
+          )?;
+        }
+      }
+      WebViewMessage::Destroy(webview_id) => {
+        if let Some(webview) = get_webview(activity_id) {
+          let parent = self
+            .env
+            .call_method(
+              webview.as_obj(),
+              "getParent",
+              "()Landroid/view/ViewParent;",
+              &[],
+            )?
+            .l()?;
+          if !parent.is_null() {
+            self.env.call_method(
+              &parent,
+              "removeView",
+              "(Landroid/view/View;)V",
+              &[webview.as_obj().into()],
+            )?;
+          }
+          self
+            .env
+            .call_method(webview.as_obj(), "destroy", "()V", &[])?;
+        }
+        super::destroy_webview(activity_id, &webview_id);
       }
       WebViewMessage::GetWebViewVersion(tx) => {
         if let Some(activity) = activity_proxy(activity_id).map(|p| p.activity) {
@@ -626,6 +750,9 @@ pub(crate) enum WebViewMessage {
     webview_id: WebviewId,
     is_changing_configurations: bool,
   },
+  SetBounds(crate::Rect),
+  SetVisible(bool),
+  Destroy(WebviewId),
 }
 
 #[derive(Clone)]
@@ -644,6 +771,8 @@ pub(crate) struct CreateWebViewAttributes {
   pub user_agent: Option<String>,
   pub initialization_scripts: Vec<InitializationScript>,
   pub javascript_disabled: bool,
+  pub bounds: Option<crate::Rect>,
+  pub visible: bool,
 }
 
 // SAFETY: only use this when you are sure the span will be dropped on the same thread it was entered

@@ -1,0 +1,2 @@
+-keep class com.wryunity.webview.** { *; }
+-keepclassmembers class com.wryunity.webview.** { native <methods>; }

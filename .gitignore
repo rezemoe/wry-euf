@@ -7,3 +7,6 @@ gh-pages
 .DS_Store
 examples/test_video.mp4
 .vscode/
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
