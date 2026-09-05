@@ -103,6 +103,25 @@ unity/
 Unity generates `.meta` files when the package is imported. Do not put generated
 build output in the Rust source directories.
 
+## Create the Unity package archive
+
+Create a UPM archive with:
+
+```sh
+./scripts/create-unity-package.sh
+```
+
+The script writes `artifacts/com.wry.unity-<version>.tgz`. In Unity Package
+Manager, choose **Add package from tarball** and select that file. Pass a different
+output directory as the first argument when needed:
+
+```sh
+./scripts/create-unity-package.sh /tmp/wry-unity-package
+```
+
+The archive contains the C# runtime, editor hook, sample, and package manifest.
+Native libraries are distributed separately by the native build workflow.
+
 ## GitHub Actions
 
 The `Build native Unity libraries` workflow in `.github/workflows/build-native.yml`

@@ -10,3 +10,5 @@ examples/test_video.mp4
 docs/node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+artifacts/
+scripts/create-unity-package.sh
